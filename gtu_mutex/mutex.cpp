@@ -42,12 +42,16 @@ void gtu::mutex::unlock()
 			std::cerr << "---------------------------" << std::endl;
 			std::cerr << "1: Unlock start" << std::endl;
 		#endif
-	#ifdef UNIX_SYSTEM
-		if(pthread_self() != this->locker)
-			throw std::domain_error("HOW DARE YOU! " + std::to_string(id));
-		if(!this->isLocked)
-			throw std::invalid_argument("DUDE CMON, ITS ALREADY UNLOCKED! " +  std::to_string(id));
-	#endif
+	if(
+		#ifdef UNIX_SYSTEM
+			pthread_self()
+		#elif defined(WINDOWS_SYSTEM)
+			GetCurrentThread()
+		#endif
+				!= this->locker)
+		throw std::domain_error("HOW DARE YOU! " + std::to_string(id));
+	if(!this->isLocked)
+		throw std::invalid_argument("DUDE CMON, ITS ALREADY UNLOCKED! " +  std::to_string(id));
 		#ifdef DEBUG
 			std::cerr << "2: Error case finished" << std::endl;
 		#endif
@@ -55,9 +59,12 @@ void gtu::mutex::unlock()
 		sched_param priority_param;
 		priority_param.__sched_priority = candidate.find({pthread_self(), EMPTY})->orj_priority;
 		if(pthread_setschedparam(pthread_self(), SCHED_FIFO, &priority_param))
-			throw std::system_error(std::error_code(errno, std::system_category()), 
-				"Failed to set priority to orj while unlock " + std::to_string(id));
+	#elif defined(WINDOWS_SYSTEM)
+		if(THREAD_PRIORITY_ERROR_RETURN == SetThreadPriority(GetCurrentThread(),
+			candidate.find({GetCurrentThread(), EMPTY})->orj_priority))
 	#endif
+			throw std::system_error(std::error_code(errno, std::system_category()),
+					"Failed to set priority to orj while unlock " + std::to_string(id));
 		#ifdef DEBUG
 			std::cerr << "3: Returned to orj priority." << std::endl;
 		#endif
@@ -86,10 +93,17 @@ void gtu::mutex::unlock()
 		#endif
 	#ifdef UNIX_SYSTEM
 		if(sched_yield())
-			throw std::system_error(std::error_code(errno,std::system_category()), 
+			throw std::system_error(std::error_code(errno,std::system_category()),
 				"Impossible in linux" + std::to_string(id));
+	#elif defined(WINDOWS_SYSTEM)
+		if(SwitchToThread())
+			#ifdef DEBUG
+				std::cerr << "I'm the last thread." << std::endl
+			#endif
+			;
 	#endif
 	std::this_thread::yield();
+
 		#ifdef DEBUG
 			std::cerr << "5: Now, I'm out." << std::endl;
 			for (auto it=locked.begin(); it!=locked.end(); ++it)
@@ -104,17 +118,29 @@ void gtu::mutex::unlock()
 
 void gtu::mutex::lock()
 {
-	//Debug fold.
-		#ifdef DEBUG
-			std::cerr << "---------------------------" << std::endl;
-			std::cerr << "1: lock start, locker: " << pthread_self() << std::endl;
-		#endif
-	int workon_priority = EMPTY;
+	std::thread::native_handle_type working_thread;
 	#ifdef UNIX_SYSTEM
-		if(locker == pthread_self())
-			throw std::invalid_argument("DUDE CMON, YOU HAVE ALREADY LOCKED! " + std::to_string(id));
-		auto workon = this->candidate.find({pthread_self(), EMPTY});
+		working_thread = pthread_self();
+	#elif defined(WINDOWS_SYSTEM)
+		// An error happens here.
+		HANDLE hRealHandle = 0;
+		DuplicateHandle( GetCurrentProcess(), // Source Process Handle.
+					 GetCurrentThread(),  // Source Handle to dup.
+					 GetCurrentProcess(), // Target Process Handle.
+					 &hRealHandle,        // Target Handle pointer.
+					 0,                   // Options flag.
+					 TRUE,                // Inheritable flag
+					 DUPLICATE_SAME_ACCESS );// Options
+		working_thread = hRealHandle;
 	#endif
+	#ifdef DEBUG
+		std::cerr << "---------------------------" << std::endl;
+		std::cerr << "1: lock start, locker: " << working_thread << std::endl;
+	#endif
+	int workon_priority = EMPTY;
+	if(locker == working_thread)
+		throw std::invalid_argument("DUDE CMON, YOU HAVE ALREADY LOCKED! " + std::to_string(id));
+	auto workon = this->candidate.find({working_thread, EMPTY});
 	if(this->candidate.end() == workon)
 		throw std::domain_error("YOU HAVEN'T GOT ASSIGNED! " + std::to_string(id));
 		#ifdef DEBUG
@@ -128,6 +154,8 @@ void gtu::mutex::lock()
 				throw std::system_error(std::error_code(errno,std::system_category()), 
 					"Failed to get priority of the thread that going to lock " + std::to_string(id));
 			workon_priority = sch.__sched_priority;
+		#elif defined(WINDOWS_SYSTEM)
+			workon_priority = GetThreadPriority(workon->the_thread);
 		#endif
 	}
 		#ifdef DEBUG
@@ -155,17 +183,22 @@ void gtu::mutex::lock()
 					if(pthread_getschedparam((*bir_keko)->locker, &policy, &priority))
 						throw std::system_error(std::error_code(errno,std::system_category()), 
 							"Failed to get the locker thread's priority within loop " + std::to_string(id));
-				#endif
-				priority.__sched_priority = priority.__sched_priority < workon_priority ?
+					priority.__sched_priority = priority.__sched_priority < workon_priority ?
 											priority.__sched_priority :
 											workon_priority;
-				#ifdef UNIX_SYSTEM
 					if (pthread_setschedparam((*bir_keko)->locker, SCHED_FIFO, &priority))
-						throw std::system_error(std::error_code(errno,std::system_category()), 
+						throw std::system_error(std::error_code(errno,std::system_category()),
 							"Failed to update the locker thread's priority within loop " + std::to_string(id));
 					if(sched_yield())
-						throw std::system_error(std::error_code(errno,std::system_category()), 
+						throw std::system_error(std::error_code(errno,std::system_category()),
 							"Impossible in linux " + std::to_string(id));
+				#elif defined(WINDOWS_SYSTEM)
+					int priority = GetThreadPriority((*bir_keko)->locker);
+					priority = priority < workon_priority ?
+								priority : workon_priority;
+					if(SetThreadPriority((*bir_keko)->locker, priority))
+						throw std::system_error(std::error_code(errno,std::system_category()),
+							"Failed to update the locker thread's priority within loop " + std::to_string(id));
 				#endif
 				std::this_thread::yield();
 				bir_keko = locked.begin();
@@ -202,12 +235,19 @@ void gtu::mutex::lock()
 
 void gtu::mutex::register_(std::thread & input, int priority)
 {
+	#ifdef DEBUG
+		std::cerr << "---------------------------" << std::endl;
+		std::cerr << "1: Register start with: " << input.native_handle() << std::endl;
+	#endif
 	#ifdef UNIX_SYSTEM
 		//Set to work in a single CPU.
 		if(pthread_setaffinity_np(input.native_handle(), sizeof(cpu_set_t), &cpuset))
 			throw std::system_error(std::error_code(errno, std::system_category()),
 				"Failed to set work on single CPU " + std::to_string(id));
 		sched_param priority_param({priority});
+	#elif defined(WINDOWS_SYSTEM)
+		DWORD_PTR mask_ptr = 1;
+		SetThreadAffinityMask(input.native_handle(), mask_ptr);
 	#endif
 	thread local(input.native_handle(), priority);
 	#ifdef UNIX_SYSTEM
@@ -218,6 +258,10 @@ void gtu::mutex::register_(std::thread & input, int priority)
 				throw std::system_error(std::error_code(local, std::system_category()), 
 					"Failed to set the registering thread's priority " + std::to_string(id));
 		}
+	#elif defined(WINDOWS_SYSTEM)
+		if(SetThreadPriority(input.native_handle(), priority))
+			throw std::system_error(std::error_code(errno,std::system_category()),
+				"Failed to set the registering thread's priority " + std::to_string(id));
 	#endif
 	this->ceil = this->ceil > priority ? this->ceil : priority;
 	candidate.insert({{local.the_thread, local.orj_priority}});

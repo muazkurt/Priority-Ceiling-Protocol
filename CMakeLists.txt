@@ -14,7 +14,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
 find_package (Threads)
 
-if( DEBUG ) 
+if( DEBUG )
     message("Entering Debug all mode.")
     #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDEBUG")
     add_compile_definitions(DEBUG)

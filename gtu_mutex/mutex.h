@@ -9,14 +9,15 @@
 	#include <stdexcept>
 	#include <forward_list>
 	#include <set>
+	#include <string>
 	#ifdef _WIN32
 		#define WINDOWS_SYSTEM
-		//I DONNO
+		#include <Windows.h>
 	#elif defined(unix) || defined(__unix__) || defined(__unix)
 		#define UNIX_SYSTEM
 		#include <pthread.h>
 	#endif
-
+	#define DEBUG
 	/**
 	 * If debug mod.
 	 **/
@@ -24,7 +25,7 @@
 		#include <iostream>
 	#endif
 
-	#define EMPTY -1
+	#define EMPTY 0
 	namespace gtu
 	{
 		class mutex : public std::mutex
@@ -42,12 +43,8 @@
 			{return this->ceil < other.ceil;}
 		private:
 			static int id;
-			#ifdef WINDOWS_SYSTEM
-				//I DONNO
-			#else
-				#ifdef UNIX_SYSTEM
-					cpu_set_t cpuset;
-				#endif
+			#ifdef UNIX_SYSTEM
+				cpu_set_t cpuset;
 			#endif
 			static std::forward_list<mutex *> locked;
 			struct thread
