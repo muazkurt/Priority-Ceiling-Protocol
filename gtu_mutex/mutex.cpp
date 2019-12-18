@@ -46,7 +46,7 @@ void gtu::mutex::unlock()
 		#ifdef UNIX_SYSTEM
 			pthread_self()
 		#elif defined(WINDOWS_SYSTEM)
-			GetCurrentThread()
+			GetCurrentThreadId()
 		#endif
 				!= this->locker)
 		throw std::domain_error("HOW DARE YOU! " + std::to_string(id));
@@ -61,7 +61,7 @@ void gtu::mutex::unlock()
 		if(pthread_setschedparam(pthread_self(), SCHED_FIFO, &priority_param))
 	#elif defined(WINDOWS_SYSTEM)
 		if(THREAD_PRIORITY_ERROR_RETURN == SetThreadPriority(GetCurrentThread(),
-			candidate.find({GetCurrentThread(), EMPTY})->orj_priority))
+			candidate.find({GetCurrentThreadId(), EMPTY})->orj_priority))
 	#endif
 			throw std::system_error(std::error_code(errno, std::system_category()),
 					"Failed to set priority to orj while unlock " + std::to_string(id));
@@ -71,10 +71,10 @@ void gtu::mutex::unlock()
 	this->isLocked = false;
 	this->locker = EMPTY;
 		#ifdef DEBUG
-			for (auto it=locked.begin(); it!=locked.end(); ++it)
+			for (auto & it : locked)
 			{
-				std::cerr << (*it)->ceil << ": ";
-				for (auto kopek=(*it)->candidate.begin(); kopek!=(*it)->candidate.end(); ++kopek)
+				std::cerr << it->ceil << ": ";
+				for (auto kopek=it->candidate.begin(); kopek!=it->candidate.end(); ++kopek)
 					std::cerr << '(' << kopek->the_thread << ", " << kopek->orj_priority << ')';
 				std::cerr << '\n';
 			}
@@ -118,20 +118,11 @@ void gtu::mutex::unlock()
 
 void gtu::mutex::lock()
 {
-	std::thread::native_handle_type working_thread;
+	thread_object working_thread =
 	#ifdef UNIX_SYSTEM
-		working_thread = pthread_self();
+		pthread_self();
 	#elif defined(WINDOWS_SYSTEM)
-		// An error happens here.
-		HANDLE hRealHandle = 0;
-		DuplicateHandle( GetCurrentProcess(), // Source Process Handle.
-					 GetCurrentThread(),  // Source Handle to dup.
-					 GetCurrentProcess(), // Target Process Handle.
-					 &hRealHandle,        // Target Handle pointer.
-					 0,                   // Options flag.
-					 TRUE,                // Inheritable flag
-					 DUPLICATE_SAME_ACCESS );// Options
-		working_thread = hRealHandle;
+		GetCurrentThreadId();
 	#endif
 	#ifdef DEBUG
 		std::cerr << "---------------------------" << std::endl;
@@ -143,9 +134,9 @@ void gtu::mutex::lock()
 	auto workon = this->candidate.find({working_thread, EMPTY});
 	if(this->candidate.end() == workon)
 		throw std::domain_error("YOU HAVEN'T GOT ASSIGNED! " + std::to_string(id));
-		#ifdef DEBUG
-			std::cerr << "2: Found candidate: " << workon->the_thread << std::endl;
-		#endif
+	#ifdef DEBUG
+		std::cerr << "2: Found candidate: " << workon->the_thread << std::endl;
+	#endif
 	{
 		#ifdef UNIX_SYSTEM
 			sched_param sch;
@@ -155,7 +146,7 @@ void gtu::mutex::lock()
 					"Failed to get priority of the thread that going to lock " + std::to_string(id));
 			workon_priority = sch.__sched_priority;
 		#elif defined(WINDOWS_SYSTEM)
-			workon_priority = GetThreadPriority(workon->the_thread);
+			workon_priority = GetThreadPriority(OpenThread(THREAD_ALL_ACCESS, TRUE, (workon->the_thread)));
 		#endif
 	}
 		#ifdef DEBUG
@@ -193,10 +184,10 @@ void gtu::mutex::lock()
 						throw std::system_error(std::error_code(errno,std::system_category()),
 							"Impossible in linux " + std::to_string(id));
 				#elif defined(WINDOWS_SYSTEM)
-					int priority = GetThreadPriority((*bir_keko)->locker);
+					int priority = GetThreadPriority(OpenThread(THREAD_ALL_ACCESS, TRUE, (*bir_keko)->locker));
 					priority = priority < workon_priority ?
 								priority : workon_priority;
-					if(SetThreadPriority((*bir_keko)->locker, priority))
+					if(!SetThreadPriority(OpenThread(THREAD_ALL_ACCESS, TRUE, (*bir_keko)->locker), priority))
 						throw std::system_error(std::error_code(errno,std::system_category()),
 							"Failed to update the locker thread's priority within loop " + std::to_string(id));
 				#endif
@@ -237,7 +228,8 @@ void gtu::mutex::register_(std::thread & input, int priority)
 {
 	#ifdef DEBUG
 		std::cerr << "---------------------------" << std::endl;
-		std::cerr << "1: Register start with: " << input.native_handle() << std::endl;
+		std::cerr << "1: Register start with: " << input.native_handle()
+					<< ", cpu: " << input.hardware_concurrency() << std::endl;
 	#endif
 	#ifdef UNIX_SYSTEM
 		//Set to work in a single CPU.
@@ -245,34 +237,27 @@ void gtu::mutex::register_(std::thread & input, int priority)
 			throw std::system_error(std::error_code(errno, std::system_category()),
 				"Failed to set work on single CPU " + std::to_string(id));
 		sched_param priority_param({priority});
-	#elif defined(WINDOWS_SYSTEM)
-		DWORD_PTR mask_ptr = 1;
-		SetThreadAffinityMask(input.native_handle(), mask_ptr);
-	#endif
-	thread local(input.native_handle(), priority);
-	#ifdef UNIX_SYSTEM
+		thread local(input.native_handle(), priority);
 		if (pthread_setschedparam(input.native_handle(), SCHED_FIFO, &priority_param))
 		{
 			auto local(errno);
 			if(local != 0)
-				throw std::system_error(std::error_code(local, std::system_category()), 
+				throw std::system_error(std::error_code(local, std::system_category()),
 					"Failed to set the registering thread's priority " + std::to_string(id));
 		}
 	#elif defined(WINDOWS_SYSTEM)
+		if(-1 == SetThreadIdealProcessor(input.native_handle(), 1))
+			throw std::system_error(std::error_code(errno, std::system_category()),
+				"Failed to set work on single CPU " + std::to_string(id));
+		if(0 == SetThreadPriorityBoost(input.native_handle(), TRUE))
+			throw std::system_error(std::error_code(errno, std::system_category()),
+				"Failed to disable priority boost" + std::to_string(id));
+		thread local(GetThreadId(input.native_handle()), priority);
 		if(SetThreadPriority(input.native_handle(), priority))
 			throw std::system_error(std::error_code(errno,std::system_category()),
 				"Failed to set the registering thread's priority " + std::to_string(id));
 	#endif
 	this->ceil = this->ceil > priority ? this->ceil : priority;
 	candidate.insert({{local.the_thread, local.orj_priority}});
-}
 
-
-void gtu::mutex::unregister(std::thread & input)
-{
-	auto item = this->candidate.find(input.native_handle());
-	this->candidate.erase(item);
-	this->ceil = -1;
-	for(auto ilk = this->candidate.begin(); ilk != this->candidate.end(); ++ilk)
-		this->ceil = (ilk->orj_priority > this->ceil) ? ilk->orj_priority : this->ceil;
 }

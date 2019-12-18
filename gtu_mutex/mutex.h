@@ -13,11 +13,12 @@
 	#ifdef _WIN32
 		#define WINDOWS_SYSTEM
 		#include <Windows.h>
+		using thread_object = DWORD;
 	#elif defined(unix) || defined(__unix__) || defined(__unix)
 		#define UNIX_SYSTEM
 		#include <pthread.h>
+		using thread_object = std::thread::native_handle_type;
 	#endif
-	#define DEBUG
 	/**
 	 * If debug mod.
 	 **/
@@ -34,7 +35,7 @@
 			mutex();
 			~mutex();
 			void register_(std::thread &, int);
-			void unregister(std::thread & input);
+			inline void unregister() {this->candidate.clear();}
 
 			void lock();
 			void unlock();
@@ -49,9 +50,9 @@
 			static std::forward_list<mutex *> locked;
 			struct thread
 			{
-				std::thread::native_handle_type the_thread;
+				thread_object the_thread;
 				int orj_priority;
-				thread(std::thread::native_handle_type _thread = EMPTY, int priority = EMPTY) 
+				thread(thread_object _thread = EMPTY, int priority = EMPTY)
 							: the_thread(_thread), orj_priority(priority)
 				{/*	(-	.	-	_)*/}
 				thread(const thread & other) 
@@ -65,7 +66,7 @@
 			int ceil;
 			bool isLocked;
 			std::set<thread> candidate;
-			std::thread::native_handle_type locker;
+			thread_object locker;
 		};
 	}
 
